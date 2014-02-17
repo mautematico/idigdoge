@@ -11,22 +11,6 @@ function home(req, res) {
 	});
 };
 
-function worker(req, res) {
-	fs.readFile('./scrypt/jsmaster.js', function(err, scrypt) {
-		if (err) return res.send(500);
-		
-		fs.readFile('./raw/worker.js', function(err, webworker) {
-			if (err) return res.send(500);
-			
-			res.type('text/javascript');
-			res.write(scrypt);
-			res.write('\n\n');
-			res.write(webworker);
-			res.send();
-		});
-	});
-};
-
 function withdraw(req, res) {
 	var id = (req.params.id || '');
 	
@@ -57,8 +41,6 @@ function withdrawp(req, res) {
 		|| !(/^([a-f0-9]{96})$/).test(id)) return res.render('withdraw', {
 		message: 'That doesn\'t look like a proper withdrawal link. If you\'re sure it\'s right, please feel free to contact us using the link at the bottom of the page.'
 	});
-	
-//	console.log(address);
 	
 	// Check the address structure
 	if (typeof address !== 'string'
@@ -110,7 +92,6 @@ function withdrawp(req, res) {
 };
 
 exports.home = home;
-exports.worker = worker;
 
 exports.withdraw = withdraw;
 exports.withdrawp = withdrawp;

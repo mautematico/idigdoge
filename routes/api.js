@@ -3,10 +3,11 @@ var http = require('http');
 var crypto = require('crypto');
 var mailer = require('nodemailer');
 
+var log = require('../log');
 var redis = require('../redis');
 var config = require('../config');
 var generate = require('../generate');
-var scrypt = require('../scrypt/scrypt');
+var scrypt = require('../scrypt/scrypt').scrypt;
 
 var transport = mailer.createTransport(config.email.transport, config.email.settings);
 
@@ -103,9 +104,12 @@ function tag(req, res, next) {
 var workCache;
 var workPolls = [];
 if (generate.available) generate.onWork(function(data) {
-	console.log('Got New Work');
+	log.info('Got New Work');
 	
 	workCache = data;
+	
+	// Only bother sending work to those polling if we're cleaning
+	if (!data.cleanJobs) return;
 	
 	for (var i = 0; i < workPolls.length; i += 1) {
 		if (!workPolls[i].connection.destroyed) {
@@ -188,7 +192,7 @@ function work(req, res) {
 		return;
 	}
 	
-	if (!workCache) return res.send(500);
+	if (!workCache) return res.send(false);
 	
 	sendWork(res);
 };
@@ -277,16 +281,16 @@ function submit(req, res) {
 		
 		if (hexLesserOrEqualTo(scryptRev, targetHex)) {
 			redis.hgetall('work::' + myData, function(err, work) {
-				if (err) return console.log(err);
+				if (err) return log.error(err);
 				if (!work) return;
 				
-				console.log('[INFO]', 'Checking Share');
+				log.info('Checking Share');
 				
 				// Check if the scrypt matches
 				var headerBuffer = new Buffer(userHeader, 'hex');
-				var myScrypt = new Buffer(scrypt(headerBuffer)).toString('hex');
+				var myScrypt = scrypt(headerBuffer).toString('hex');
 				
-				if (userScrypt != myScrypt) return console.log('[INFO]', 'Failed Scrypt Test');
+				if (userScrypt != myScrypt) return log.info('Failed Scrypt Test');
 				
 				// Reverse the nonce
 				var nonceRev = seh(userHeader.substr(152, 8));
@@ -303,14 +307,11 @@ function submit(req, res) {
 					, nonceRev
 				];
 				
-				console.log('[INFO]', JSON.stringify(params));
-				console.log('[INFO]', JSON.stringify(data));
-				
 				// Send the work
 				generate.submitWork(params, function(err) {
-					if (err) return console.log('[ERROR]', 'Share Rejected', JSON.stringify(err));
+					if (err) return log.error('Share Rejected', err);
 					
-					console.log('[INFO]', 'Share Accepted');
+					log.info('Share Accepted');
 				});
 			});
 		}

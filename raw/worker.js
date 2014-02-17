@@ -1,15 +1,25 @@
 var nonce = 0;
 var maxNonce = 0;
-var header = new Uint8Array(80);
-var scrypt = scrypt_module_factory();
+var scrypt = (function() {
+	var inputPTR = Module._malloc(80);
+	var outputPTR = Module._malloc(32);
 
-var updated = Date.now();
-var hashes = 0;
+	var input = Module.HEAPU8.subarray(inputPTR, inputPTR + 80)
+	var output = Module.HEAPU8.subarray(outputPTR, outputPTR + 32);
+
+	var scrypt = Module.cwrap('SCRYPT', null, ['number', 'number']);
+
+	return {
+		input: input
+		, output: output
+		, hash: function() {
+			scrypt(inputPTR, outputPTR);
+		}
+	};
+})();
 
 self.addEventListener('message', function(e) {
-	switch (e.data.type) {
-		case 'work': unpackWork(e.data); break;
-	}
+	unpackWork(e.data);
 }, false);
 
 function hex2Buf(str) {
@@ -33,60 +43,37 @@ function buf2Hex(buf) {
 };
 
 function unpackWork(msg) {
-	nonce = msg.nonce[0];
-	maxNonce = msg.nonce[1];
+	var buf = hex2Buf(msg);
 	
-	var buf = hex2Buf(msg.data);
-	
-	// Copy it into the header
+	// Copy it into the input
 	for (var i = 0; i < 76; i += 1) {
-		header[i] = buf[i];
+		scrypt.input[i] = buf[i];
 	}
+	
+	// Set the start and end
+	nonce = (buf[76] | (buf[77] << 8) | (buf[78] << 16) | (buf[79] << 24)) >>> 0;
+	maxNonce = (buf[80] | (buf[81] << 8) | (buf[82] << 16) | (buf[83] << 24)) >>> 0;
+	
+	workLoop();
 };
 
 function workLoop() {
-	var hashed;
-	
 	while (nonce < maxNonce) {	
-		header[76] = nonce & 0xff;
-		header[77] = (nonce >> 8) & 0xff;
-		header[78] = (nonce >> 16) & 0xff;
-		header[79] = (nonce >> 24) & 0xff;
+		scrypt.input[76] = nonce & 0xff;
+		scrypt.input[77] = (nonce >> 8) & 0xff;
+		scrypt.input[78] = (nonce >> 16) & 0xff;
+		scrypt.input[79] = (nonce >> 24) & 0xff;
 		
-		hashed = scrypt.crypto_scrypt(header, header, 1024, 1, 1, 32);
+		scrypt.hash();
 		
 		// We're just doing a simple share system, so this is the only check
-		if (hashed[31] == 0 && hashed[30] <= 6) {
-			self.postMessage({
-				type: 'submit'
-				, header: buf2Hex(header)
-				, scrypt: buf2Hex(hashed)
-			});
+		if (scrypt.output[31] == 0 && scrypt.output[30] <= 6) {
+			self.postMessage(buf2Hex(scrypt.input) + buf2Hex(scrypt.output));
 		}
 		
 		// Increase the nonce
 		nonce += 1;
-		
-		// Count how many hashes we've done
-		hashes += 1;
-		
-		// Take a break every 5 seconds
-		if (Date.now() - updated > 5000) break;
 	}
 	
-	// Send a rate update if more than five seconds have passed
-	if (Date.now() - updated > 5000) {
-		self.postMessage({
-			type: 'rate'
-			, rate: (hashes / ((Date.now() - updated) / 1000))
-		});
-		
-		updated = Date.now();
-		hashes = 0;
-	}
-	
-	// Do it all again in a tiny amount of time to allow for incoming messages
-	setTimeout(workLoop, 25);
+	self.postMessage(false);
 };
-
-workLoop();

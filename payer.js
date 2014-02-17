@@ -1,17 +1,9 @@
+var log = require('./log');
 var redis = require('./redis');
 var config = require('./config');
-var scrypt = require('./scrypt/scrypt');
+var scrypt = require('./scrypt/scrypt').scrypt;
 
 process.title = 'pyer';
-
-var log = {
-	error: function(err, share) {
-		console.log('[ERROR]', process.pid, err, share);
-	}
-	, info: function(message) {
-		console.log('[INFO]', process.pid, message);
-	}
-};
 
 function penalize(share) {
 	// TODO: Something in this function.
@@ -20,12 +12,12 @@ function penalize(share) {
 function parseUserShare(share) {
 	var scryptBuffer = new Buffer(share.scrypt, 'hex');
 	
-	// Check if its passes the difficulty test
+	// Check if it passes the difficulty test
 	if (scryptBuffer[31] != 0 || scryptBuffer[30] > 6) return penalize(share);
 	
 	// Check if the scrypt matches
 	var headerBuffer = new Buffer(share.header, 'hex');
-	var myScrypt = new Buffer(scrypt(headerBuffer)).toString('hex');
+	var myScrypt = scrypt(headerBuffer).toString('hex');
 	
 	if (share.scrypt != myScrypt) return penalize(share);
 	
@@ -69,9 +61,29 @@ function parseUserShare(share) {
 
 function mainLoop() {
 	redis.lpop('shares::user', function(err, share) {
-		if (err) return log.error(err, null);
+		if (err) return log.error(err);
 		if (share) parseUserShare(JSON.parse(share));
 	});
 };
 
 setInterval(mainLoop, 500);
+
+// Cleanup
+
+function cleanup() {
+	redis.zremrangebyscore('shares::accepted', 0, Date.now() - config.cleanupIgnore, function(err, rem) {
+		if (err) return log.error('Cleanup Error', err);
+		
+		log.info('Removed ' + rem + ' Old Shares');
+		
+		redis.bgrewriteaof(function(err) {
+			if (err) return log.error('Background Rewrite Error', err);
+		});
+	});
+};
+
+var cleanTime = (process.env.NODE_CLEANUP || config.cleanupInterval);
+if (cleanTime) {
+	if (typeof cleanTime === 'string') cleanTime = parseInt(cleanTime, 10);
+	if (typeof cleanTime === 'number' && !isNaN(cleanTime) && cleanTime > 0 && isFinite(cleanTime)) setInterval(cleanup, cleanTime);
+}

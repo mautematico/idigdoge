@@ -1,5 +1,7 @@
 var net = require('net');
 
+var log = require('./log');
+
 function Stratum(config, ready) {
 	this.config = config;
 	
@@ -11,18 +13,23 @@ function Stratum(config, ready) {
 	this.ready = ready;
 	this.delay = 35;
 	this.connect();
+	this.reconnect = false;
 };
 
 Stratum.prototype.connect = function() {
 	var stratum = this;
 	
+	this.reconnect = false;
 	this.connection = net.connect(this.config.port, this.config.host, function() {
 		var data = '';
 		
-		this.setTimeout(0);
+		this.setTimeout(1000 * 300);
 		this.setKeepAlive(true, 1000 * 15);
 		
 		this.on('data', function(chunk) {
+			// Reset the delay
+			stratum.delay = 35;
+			
 			data += chunk.toString('utf8');
 			
 			var index = -1;
@@ -50,7 +57,7 @@ Stratum.prototype.connect = function() {
 							events[i].apply(stratum, [message])
 						}
 					} else {
-						console.log('Unhandled Event', event);
+						log.info('Stratum Unhandled Event', event);
 					}
 				}
 			}
@@ -61,27 +68,36 @@ Stratum.prototype.connect = function() {
 		
 		var ready = stratum.ready.bind(stratum);
 		ready();
+	});
+	
+	this.connection.on('timeout', function() {
+		log.info('Stratum Timeout');
 		
-		// Reset the delay
-		stratum.delay = 35;
+		this.destroy();
 	});
 	
 	this.connection.on('close', function() {
-		console.log('Stratum Closed', arguments);
+		// Don't double-reconnect
+		if (stratum.reconnect) return;
+		
+		log.info('Stratum Closed');
 		
 		stratum.isReady = false;
-		stratum.delay *= 3;
+		stratum.delay *= 2;
 		
-		setTimeout(stratum.connect.bind(stratum), stratum.delay);
+		stratum.reconnect = setTimeout(stratum.connect.bind(stratum), stratum.delay);
 	});
 	
 	this.connection.on('error', function(err) {
-		console.log('Fatal Error', err);
+		// Don't double-reconnect
+		if (stratum.reconnect) return;
+		
+		log.error('Stratum Error', err);
 		
 		stratum.isReady = false;
-		stratum.delay *= 3;
+		stratum.delay *= 2;
 		
-		setTimeout(stratum.connect.bind(stratum), stratum.delay);
+		stratum.reconnect = setTimeout(stratum.connect.bind(stratum), stratum.delay);
 	});
 };
 
@@ -91,7 +107,7 @@ Stratum.prototype.request = function(method, params, callback) {
 			callback('Connection Not Ready');
 		}
 		
-		console.log('Connection Not Ready');
+		log.info('Connection Not Ready');
 		return;
 	}
 	
